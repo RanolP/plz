@@ -1,6 +1,6 @@
 # plz
 
-Suggest the command you may want for ergonomics
+Suggest the command you may want, for ergonomics
 
 ## The Idea
 
