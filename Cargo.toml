@@ -9,3 +9,5 @@ edition = "2021"
 clap = { version = "4.0.10", features = ["derive"] }
 miette = { version = "5.3.0", features = ["fancy", "backtrace"] }
 thiserror = "1.0.37"
+
+nix = { version = "0.25", default-features = false, features = ["fs", "process", "term"] }

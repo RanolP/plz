@@ -1,45 +1,38 @@
 use std::{
+    fs::File,
     io::Write,
-    process::Child,
+    path::PathBuf,
+    process::{Child, ExitStatus},
     sync::mpsc::{self, Receiver},
     thread::{scope, Builder},
 };
 
-use thiserror::Error;
-
+pub use error::SessionError;
 pub use init::{SessionBootstrapError, SessionInit};
 
 use self::{
-    event::{SessionEvent, SessionEventProduceError},
+    event::SessionEvent,
     producer::{StderrProducer, StdinProducer, StdoutProducer},
 };
 
+mod error;
 mod event;
 mod init;
 mod producer;
 
 pub struct Session {
-    child: Child,
-}
-
-#[derive(Debug, Error)]
-pub enum SessionError {
-    #[error("Io error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("An error occured when producing events: {0}")]
-    SessionEvent(#[from] SessionEventProduceError),
+    pub shell: PathBuf,
 }
 
 impl Session {
-    pub fn run(mut self) -> Result<(), SessionError> {
+    pub fn run(mut self) -> Result<ExitStatus, SessionError> {
         let (tx, rx) = mpsc::channel();
 
         let stdin_producer = self.child.stdin.take().map(StdinProducer);
         let stdout_producer = self.child.stdout.take().map(StdoutProducer);
         let stderr_producer = self.child.stderr.take().map(StderrProducer);
 
-        scope(|s| -> Result<_, SessionError> {
+        let exit_status = scope(|s| -> Result<_, SessionError> {
             let tx_stdin = tx.clone();
             let stdin_producer_handle = stdin_producer
                 .map(move |stdin_producer| {
@@ -70,6 +63,18 @@ impl Session {
                 .name("stdio-loop".to_string())
                 .spawn_scoped(s, move || Session::stdio_loop(rx))?;
 
+            let tx_check_die = tx.clone();
+            let check_die = Builder::new().name("check-die".to_string()).spawn_scoped(
+                s,
+                move || -> Result<_, SessionError> {
+                    let exit_status = self.child.wait()?;
+                    tx_check_die
+                        .send(SessionEvent::Die)
+                        .map_err(SessionError::Send)?;
+                    Ok(exit_status)
+                },
+            )?;
+
             if let Some(stdin_producer_handle) = stdin_producer_handle {
                 stdin_producer_handle.join().unwrap()?;
             }
@@ -79,41 +84,42 @@ impl Session {
             if let Some(stderr_producer_handle) = stderr_producer_handle {
                 stderr_producer_handle.join().unwrap()?;
             }
+            let exit_status = check_die.join().unwrap()?;
             stdio_loop.join().unwrap()?;
-            Ok(())
+
+            Ok(exit_status)
         })?;
 
-        Ok(())
+        Ok(exit_status)
     }
 
     fn stdio_loop(rx: Receiver<SessionEvent>) -> Result<(), SessionError> {
         let mut stdout = std::io::stdout().lock();
         let mut stderr = std::io::stderr().lock();
 
-        let mut prompt: Option<Vec<u8>> = None;
         let mut buffer: Vec<u8> = Vec::new();
+
+        let mut file = File::create("debug.log")?;
 
         while let Ok(e) = rx.recv() {
             match e {
                 SessionEvent::Stdout(data) => {
-                    if let Some(prompt) = &prompt {
-                        if &data == prompt {
-                            write!(stdout, ":::debug\n{:?}\n:::\n\n", buffer)?;
-                            buffer.clear();
-                        } else {
-                            buffer.extend(&data);
-                        }
-                    } else {
-                        prompt = Some(data.to_vec());
-                    }
+                    buffer.extend(&data);
                     stdout.write(&data)?;
                     stdout.flush()?;
                 }
                 SessionEvent::Stderr(data) => {
+                    buffer.extend(&data);
                     stderr.write(&data)?;
                     stderr.flush()?;
                 }
-                SessionEvent::Stdin(data) => {}
+                SessionEvent::Enter => {
+                    file.write(b":::debug (buffer)\n")?;
+                    file.write(&buffer)?;
+                    buffer.clear();
+                    file.write(b"\n:::\n\n")?;
+                }
+                SessionEvent::Die => break,
             }
         }
         Ok(())

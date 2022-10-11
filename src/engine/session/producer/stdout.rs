@@ -1,15 +1,19 @@
-use std::{
-    io::{Read, Write},
-    process::ChildStdout,
-    sync::mpsc::Sender,
-};
+use std::{io::Read, process::ChildStdout, sync::mpsc::Sender};
 
-use crate::engine::session::event::{SessionEvent, SessionEventProduceError};
+use nix::unistd;
+
+use crate::engine::{
+    faketty,
+    session::{SessionError, SessionEvent},
+};
 
 pub struct StdoutProducer(pub ChildStdout);
 
 impl StdoutProducer {
-    pub fn boot(mut self, sender: Sender<SessionEvent>) -> Result<(), SessionEventProduceError> {
+    pub fn boot(mut self, sender: Sender<SessionEvent>) -> Result<(), SessionError> {
+        let stdout = faketty::dup(1)?;
+        unistd::dup2(stdout, 1)?;
+
         // let mut stderr = std::io::stderr().lock();
         let mut buffer = [0; 1024];
         loop {
