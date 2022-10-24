@@ -1,4 +1,3 @@
-pub use session::{Session, SessionBootstrapError, SessionInit};
+pub use session::{Session, SessionInit};
 
-mod faketty;
 mod session;

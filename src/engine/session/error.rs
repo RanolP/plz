@@ -14,4 +14,10 @@ pub enum SessionError {
 
     #[error("Send error: {0}")]
     Send(#[from] SendError<SessionEvent>),
+
+    #[error("Found NUL from path: {0}")]
+    PathNul(#[from] std::ffi::NulError),
+
+    #[error("Failed to spawn child")]
+    SpawnChild,
 }
